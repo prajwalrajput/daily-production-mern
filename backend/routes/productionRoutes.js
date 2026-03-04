@@ -13,16 +13,14 @@ router.post("/", async (req, res) => {
       return res.status(400).json({ message: "All fields are required" });
     }
 
-    // Convert productionQty to Number safely
     const productionQtyNumber = Number(productionQty);
     if (isNaN(productionQtyNumber)) {
       return res.status(400).json({ message: "Invalid production quantity" });
     }
 
-    // Calculate date range for the day
+    // Date range for the day
     const startOfDay = new Date(date);
     startOfDay.setHours(0, 0, 0, 0);
-
     const endOfDay = new Date(date);
     endOfDay.setHours(23, 59, 59, 999);
 
@@ -32,34 +30,41 @@ router.post("/", async (req, res) => {
       shift: shift,
     });
 
-    // Get last record for stock calculation
-    const lastRecord = await Production.findOne().sort({ createdAt: -1 });
+    // Get last record before this entry for opening stock
+    const lastRecord = await Production.findOne({ date: { $lt: startOfDay } }).sort({ date: -1, createdAt: -1 });
     let openingStock = lastRecord ? lastRecord.closingStock : 0;
-    let closingStock;
+    let closingStock = openingStock + productionQtyNumber;
 
     if (existing) {
-      // When updating, remove old productionQty and add new
-      closingStock = openingStock - existing.productionQty + productionQtyNumber;
-
+      // UPDATE existing record
       existing.productionQty = productionQtyNumber;
+      existing.openingStock = openingStock;
       existing.closingStock = closingStock;
       await existing.save();
-      return res.json({ message: "Record Updated" });
+    } else {
+      // CREATE new record
+      const newEntry = new Production({
+        date,
+        shift,
+        openingStock,
+        productionQty: productionQtyNumber,
+        closingStock,
+      });
+      await newEntry.save();
     }
 
-    // CREATE NEW
-    closingStock = openingStock + productionQtyNumber;
+    // Update all subsequent records
+    const subsequentRecords = await Production.find({ date: { $gt: startOfDay } }).sort({ date: 1, createdAt: 1 });
+    let prevClosing = closingStock;
 
-    const newEntry = new Production({
-      date,
-      shift,
-      openingStock,
-      productionQty: productionQtyNumber,
-      closingStock,
-    });
+    for (let record of subsequentRecords) {
+      record.openingStock = prevClosing;
+      record.closingStock = prevClosing + record.productionQty;
+      prevClosing = record.closingStock;
+      await record.save();
+    }
 
-    await newEntry.save();
-    res.json({ message: "Record Created" });
+    res.json({ message: existing ? "Record Updated and Subsequent Stocks Adjusted" : "Record Created and Subsequent Stocks Adjusted" });
 
   } catch (error) {
     console.error("Error saving production:", error);
@@ -70,7 +75,7 @@ router.post("/", async (req, res) => {
 // Get All Records
 router.get("/", async (req, res) => {
   try {
-    const records = await Production.find().sort({ createdAt: -1 });
+    const records = await Production.find().sort({ date: 1, shift: 1, createdAt: 1 });
     res.json(records);
   } catch (error) {
     console.error("Error fetching production:", error);
