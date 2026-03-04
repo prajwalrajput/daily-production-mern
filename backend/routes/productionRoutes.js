@@ -34,11 +34,13 @@ router.post("/", async (req, res) => {
 
     // Get last record for stock calculation
     const lastRecord = await Production.findOne().sort({ createdAt: -1 });
-    const openingStock = lastRecord ? lastRecord.closingStock : 0;
-    const closingStock = openingStock + productionQtyNumber;
+    let openingStock = lastRecord ? lastRecord.closingStock : 0;
+    let closingStock;
 
     if (existing) {
-      // UPDATE
+      // When updating, remove old productionQty and add new
+      closingStock = openingStock - existing.productionQty + productionQtyNumber;
+
       existing.productionQty = productionQtyNumber;
       existing.closingStock = closingStock;
       await existing.save();
@@ -46,6 +48,8 @@ router.post("/", async (req, res) => {
     }
 
     // CREATE NEW
+    closingStock = openingStock + productionQtyNumber;
+
     const newEntry = new Production({
       date,
       shift,
