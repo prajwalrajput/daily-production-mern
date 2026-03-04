@@ -3,22 +3,23 @@ const express = require("express");
 const router = express.Router();
 const Production = require("../models/Production");
 
-// Add or Update Production Entry
+// Add Production Entry
 router.post("/", async (req, res) => {
   try {
     const { date, shift, productionQty } = req.body;
 
-    // Validate required fields
+    // Validate required fields 
     if (!date || !shift || productionQty === undefined) {
       return res.status(400).json({ message: "All fields are required" });
     }
 
+    // Convert productionQty to Number safely
     const productionQtyNumber = Number(productionQty);
     if (isNaN(productionQtyNumber)) {
       return res.status(400).json({ message: "Invalid production quantity" });
     }
 
-    // Date range for the day
+    // Calculate date range for the day
     const startOfDay = new Date(date);
     startOfDay.setHours(0, 0, 0, 0);
     const endOfDay = new Date(date);
@@ -30,41 +31,27 @@ router.post("/", async (req, res) => {
       shift: shift,
     });
 
-    // Get last record before this entry for opening stock
-    const lastRecord = await Production.findOne({ date: { $lt: startOfDay } }).sort({ date: -1, createdAt: -1 });
-    let openingStock = lastRecord ? lastRecord.closingStock : 0;
-    let closingStock = openingStock + productionQtyNumber;
-
     if (existing) {
-      // UPDATE existing record
-      existing.productionQty = productionQtyNumber;
-      existing.openingStock = openingStock;
-      existing.closingStock = closingStock;
-      await existing.save();
-    } else {
-      // CREATE new record
-      const newEntry = new Production({
-        date,
-        shift,
-        openingStock,
-        productionQty: productionQtyNumber,
-        closingStock,
-      });
-      await newEntry.save();
+      // Do not update stock, just send a flash/message
+      return res.status(200).json({ message: "Record already exists for this date and shift." });
     }
 
-    // Update all subsequent records
-    const subsequentRecords = await Production.find({ date: { $gt: startOfDay } }).sort({ date: 1, createdAt: 1 });
-    let prevClosing = closingStock;
+    // Get last record for stock calculation
+    const lastRecord = await Production.findOne().sort({ createdAt: -1 });
+    const openingStock = lastRecord ? lastRecord.closingStock : 0;
+    const closingStock = openingStock + productionQtyNumber;
 
-    for (let record of subsequentRecords) {
-      record.openingStock = prevClosing;
-      record.closingStock = prevClosing + record.productionQty;
-      prevClosing = record.closingStock;
-      await record.save();
-    }
+    // CREATE NEW
+    const newEntry = new Production({
+      date,
+      shift,
+      openingStock,
+      productionQty: productionQtyNumber,
+      closingStock,
+    });
 
-    res.json({ message: existing ? "Record Updated and Subsequent Stocks Adjusted" : "Record Created and Subsequent Stocks Adjusted" });
+    await newEntry.save();
+    res.json({ message: "Record Created" });
 
   } catch (error) {
     console.error("Error saving production:", error);
@@ -75,7 +62,7 @@ router.post("/", async (req, res) => {
 // Get All Records
 router.get("/", async (req, res) => {
   try {
-    const records = await Production.find().sort({ date: 1, shift: 1, createdAt: 1 });
+    const records = await Production.find().sort({ createdAt: -1 });
     res.json(records);
   } catch (error) {
     console.error("Error fetching production:", error);
